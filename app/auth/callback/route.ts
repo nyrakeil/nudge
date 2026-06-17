@@ -6,45 +6,55 @@ export async function GET(request: Request) {
   const code = searchParams.get("code")
 
   if (!code) {
-    return NextResponse.redirect(`${origin}/`)
+    return NextResponse.redirect(new URL("/", origin))
   }
 
-  try {
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.exchangeCodeForSession(code)
+  const supabase = await createClient()
 
-    if (error || !user) {
-      return NextResponse.redirect(`${origin}/`)
-    }
+  const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
 
-    const { error: upsertError } = await supabase.from("profiles").upsert({
+  if (exchangeError) {
+    console.error("Auth exchange error:", exchangeError.message)
+    return NextResponse.redirect(new URL("/", origin))
+  }
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError || !user) {
+    console.error("Get user error:", userError?.message)
+    return NextResponse.redirect(new URL("/", origin))
+  }
+
+  const { error: profileError } = await supabase.from("profiles").upsert(
+    {
       id: user.id,
-      name: user.user_metadata.full_name,
-    })
+      name: user.user_metadata.full_name || user.email || "User",
+    },
+    { onConflict: "id" }
+  )
 
-    if (upsertError) {
-      return NextResponse.redirect(`${origin}/`)
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("push_style")
-      .eq("id", user.id)
-      .single()
-
-    if (profileError || !profile) {
-      return NextResponse.redirect(`${origin}/`)
-    }
-
-    if (!profile.push_style) {
-      return NextResponse.redirect(`${origin}/onboarding`)
-    }
-
-    return NextResponse.redirect(`${origin}/session`)
-  } catch {
-    return NextResponse.redirect(`${origin}/`)
+  if (profileError) {
+    console.error("Profile upsert error:", profileError.message)
+    return NextResponse.redirect(new URL("/", origin))
   }
+
+  const { data: profile, error: fetchProfileError } = await supabase
+    .from("profiles")
+    .select("push_style")
+    .eq("id", user.id)
+    .single()
+
+  if (fetchProfileError) {
+    console.error("Fetch profile error:", fetchProfileError.message)
+    return NextResponse.redirect(new URL("/", origin))
+  }
+
+  if (!profile?.push_style) {
+    return NextResponse.redirect(new URL("/onboarding", origin))
+  }
+
+  return NextResponse.redirect(new URL("/session", origin))
 }
